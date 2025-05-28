@@ -32,7 +32,6 @@ pub mod whois;
 pub mod cache;
 pub mod config;
 pub mod errors;
-pub mod metrics;
 
 // Re-export main types for easy access
 pub use whois::{WhoisService, WhoisResult};

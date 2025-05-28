@@ -1,13 +1,19 @@
 #[cfg(feature = "server")]
 use axum::{http::StatusCode, response::IntoResponse};
+#[cfg(feature = "server")]
 use metrics::{counter, gauge, histogram};
+#[cfg(feature = "server")]
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+#[cfg(feature = "server")]
 use std::sync::{Arc, OnceLock};
+#[cfg(feature = "server")]
 use tokio::sync::RwLock;
 
 // Thread-safe, dynamic metrics handle
+#[cfg(feature = "server")]
 static PROMETHEUS_HANDLE: OnceLock<Arc<RwLock<Option<PrometheusHandle>>>> = OnceLock::new();
 
+#[cfg(feature = "server")]
 pub fn init_metrics() {
     let builder = PrometheusBuilder::new();
 
@@ -45,23 +51,28 @@ pub fn init_metrics() {
     }
 }
 
+#[cfg(feature = "server")]
 pub fn increment_requests(domain: &str) {
     let tld = extract_tld(domain);
     counter!("whois_requests_total", "tld" => tld).increment(1);
 }
 
+#[cfg(feature = "server")]
 pub fn increment_cache_hits() {
     counter!("whois_cache_hits_total").increment(1);
 }
 
+#[cfg(feature = "server")]
 pub fn increment_cache_misses() {
     counter!("whois_cache_misses_total").increment(1);
 }
 
+#[cfg(feature = "server")]
 pub fn increment_errors(error_type: &str) {
     counter!("whois_errors_total", "error_type" => error_type.to_string()).increment(1);
 }
 
+#[cfg(feature = "server")]
 pub fn record_query_time(duration_ms: u64) {
     let duration_seconds = duration_ms as f64 / 1000.0;
     histogram!("whois_request_duration_seconds").record(duration_seconds);
@@ -82,6 +93,7 @@ pub async fn metrics_handler() -> impl IntoResponse {
     }
 }
 
+#[cfg(feature = "server")]
 fn extract_tld(domain: &str) -> String {
     domain
         .split('.')
