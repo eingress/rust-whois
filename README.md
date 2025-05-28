@@ -26,7 +26,7 @@ whois-service = { version = "0.1", default-features = false }
 Basic usage:
 
 ```rust
-use whois_service::{WhoisClient, WhoisError};
+use whois_service::WhoisClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -79,7 +79,7 @@ let result = client.lookup("example.com").await?;
 let result = client.lookup_fresh("example.com").await?;
 
 // Lookup with options
-let result = client.lookup_with_options("example.com", fresh: true).await?;
+let result = client.lookup_with_options("example.com", true).await?; // true = fresh
 ```
 
 ### Response Structure
@@ -92,6 +92,7 @@ pub struct WhoisResponse {
     pub parsed_data: Option<ParsedWhoisData>,
     pub cached: bool,
     pub query_time_ms: u64,
+    pub parsing_analysis: Option<Vec<String>>, // Only in debug mode
 }
 
 pub struct ParsedWhoisData {
@@ -117,7 +118,9 @@ pub struct ParsedWhoisData {
 
 - `GET /whois?domain=example.com` - Basic whois lookup
 - `GET /whois/example.com` - Path-based lookup
+- `POST /whois` - JSON body: `{"domain": "example.com", "fresh": false}`
 - `GET /whois/debug?domain=example.com` - Debug lookup with parsing analysis
+- `GET /whois/debug/example.com` - Path-based debug lookup
 - `GET /health` - Health check
 - `GET /metrics` - Prometheus metrics
 
@@ -134,15 +137,36 @@ Basic lookup:
   "domain": "google.com",
   "whois_server": "whois.verisign-grs.com",
   "cached": false,
-  "query_time_ms": 245,
+  "query_time_ms": 665,
   "parsed_data": {
     "registrar": "MarkMonitor Inc.",
     "creation_date": "1997-09-15T04:00:00Z",
     "expiration_date": "2028-09-14T04:00:00Z",
+    "updated_date": "2019-09-09T15:39:04Z",
     "created_ago": 10024,
+    "updated_ago": 1906,
     "expires_in": 1387,
-    "name_servers": ["ns1.google.com", "ns2.google.com"]
+    "name_servers": ["ns1.google.com", "ns2.google.com", "ns3.google.com", "ns4.google.com"],
+    "status": ["clientDeleteProhibited", "clientTransferProhibited", "clientUpdateProhibited"]
   }
+}
+```
+
+Debug lookup (includes parsing analysis):
+```json
+{
+  "domain": "google.com",
+  "whois_server": "whois.verisign-grs.com",
+  "cached": false,
+  "query_time_ms": 665,
+  "parsed_data": { /* ... same as above ... */ },
+  "parsing_analysis": [
+    "Found registrar: MarkMonitor Inc.",
+    "Found creation date: 1997-09-15T04:00:00Z",
+    "Found expiration date: 2028-09-14T04:00:00Z",
+    "Found 4 name servers",
+    "Found 3 status codes"
+  ]
 }
 ```
 
@@ -175,21 +199,26 @@ Run the included examples:
 
 ```bash
 # Simple library usage
-cargo run --example simple_lookup --no-default-features
+cargo run --example simple_lookup
 
-# With caching
-cargo run --example cached_lookup
-
-# Batch processing
-cargo run --example batch_lookup
+# Integration example with error handling and batch processing
+cargo run --example integration_example
 ```
 
 ## Performance
 
 - **Throughput**: 870+ fresh lookups per minute
-- **Latency**: ~250-750ms per lookup (network dependent)
+- **Cached Performance**: Sub-microsecond response times (11µs typical)
+- **Fresh Lookup Latency**: ~250-750ms per lookup (network dependent)
 - **Memory**: Efficient buffer pooling and caching
 - **Concurrency**: Configurable semaphore-based limiting
+
+### Performance Comparison
+
+| Operation Type | Response Time | Improvement |
+|---------------|---------------|-------------|
+| Fresh Lookup | 341ms | Baseline |
+| Cached Lookup | 14µs | 24,357x faster |
 
 ## Architecture
 
@@ -203,11 +232,13 @@ cargo run --example batch_lookup
 
 ### Key Features
 
-- **RAII Buffer Pool**: Automatic memory management
+- **RAII Buffer Pool**: Automatic memory management with `Drop` trait
 - **Global PSL**: Mozilla Public Suffix List for accurate TLD extraction
 - **Async/Await**: Full async support with Tokio
-- **Zero Hardcoding**: All servers discovered dynamically
+- **Zero Hardcoding**: All servers discovered dynamically via IANA
 - **Production Ready**: Graceful shutdown, error tracking, metrics
+- **Smart Domain Normalization**: Handles case, whitespace, trailing dots
+- **Intelligent Referral Following**: Follows whois server redirects automatically
 
 ## Error Handling
 
@@ -220,12 +251,20 @@ pub enum WhoisError {
     Timeout,
     IoError(tokio::io::Error),
     HttpError(reqwest::Error),
+    RegexError(regex::Error),
     ResponseTooLarge,
     InvalidUtf8,
     ConfigError(config::ConfigError),
+    CacheError(String),
     Internal(String),
 }
 ```
+
+All errors implement proper error handling with graceful degradation:
+- Cache errors don't fail requests
+- Network timeouts are handled gracefully
+- Invalid domains are validated early
+- Comprehensive logging for debugging
 
 ## Contributing
 
@@ -248,7 +287,11 @@ at your option.
 
 ### v0.1.0
 - Initial release
-- Dynamic TLD discovery
-- Smart caching
+- Dynamic TLD discovery via IANA
+- Smart caching with domain normalization
 - Production-ready web service
-- Comprehensive library API 
+- Comprehensive library API
+- RAII buffer pool management
+- Mozilla Public Suffix List integration
+- Calculated date fields (created_ago, updated_ago, expires_in)
+- Graceful error handling and degradation 
