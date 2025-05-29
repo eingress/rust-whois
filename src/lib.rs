@@ -4,12 +4,12 @@
 //! 
 //! ## Features
 //! 
-//! - Dynamic TLD discovery via IANA
-//! - Intelligent whois server detection
-//! - Structured data parsing with calculated fields
+//! - Hybrid TLD discovery: hardcoded mappings for popular TLDs + dynamic discovery
+//! - Intelligent whois server detection with fallback strategies
+//! - Structured data parsing with calculated fields (age, expiration)
 //! - Optional caching with smart domain normalization
-//! - Zero hardcoded values - fully dynamic
-//! - Production-ready error handling
+//! - Production-ready error handling with graceful degradation
+//! - High-performance async implementation with connection pooling
 //! 
 //! ## Quick Start
 //! 
@@ -32,6 +32,9 @@ pub mod whois;
 pub mod cache;
 pub mod config;
 pub mod errors;
+pub mod tld_mappings;
+pub mod buffer_pool;
+pub mod parser;
 
 // Re-export main types for easy access
 pub use whois::{WhoisService, WhoisResult};
@@ -69,30 +72,40 @@ pub struct WhoisClient {
 }
 
 impl WhoisClient {
+    // === Constructor Methods ===
+    
     /// Create a new whois client with default configuration
     pub async fn new() -> Result<Self, WhoisError> {
-        let config = Arc::new(Config::load().map_err(|e| WhoisError::ConfigError(e))?);
+        let config = Self::load_default_config()?;
         Self::new_with_config(config).await
     }
 
     /// Create a new whois client with custom configuration
     pub async fn new_with_config(config: Arc<Config>) -> Result<Self, WhoisError> {
         let service = Arc::new(WhoisService::new(config.clone()).await?);
-        let cache = Some(Arc::new(
-            CacheService::new(config)
-                .map_err(|e| WhoisError::CacheError(format!("Failed to initialize cache: {}", e)))?
-        ));
+        let cache = Self::initialize_cache(config)?;
         
         Ok(Self { service, cache })
     }
 
     /// Create a new whois client without caching
     pub async fn new_without_cache() -> Result<Self, WhoisError> {
-        let config = Arc::new(Config::load().map_err(|e| WhoisError::ConfigError(e))?);
+        let config = Self::load_default_config()?;
         let service = Arc::new(WhoisService::new(config).await?);
         
         Ok(Self { service, cache: None })
     }
+
+    /// Initialize cache - follows SRP
+    fn initialize_cache(config: Arc<Config>) -> Result<Option<Arc<CacheService>>, WhoisError> {
+        let cache = Some(Arc::new(
+            CacheService::new(config)
+                .map_err(|e| WhoisError::CacheError(format!("Failed to initialize cache: {}", e)))?
+        ));
+        Ok(cache)
+    }
+
+    // === Public API Methods ===
 
     /// Perform a whois lookup for the given domain
     /// 
@@ -109,32 +122,12 @@ impl WhoisClient {
     /// Perform a whois lookup with caching options
     pub async fn lookup_with_options(&self, domain: &str, fresh: bool) -> Result<WhoisResponse, WhoisError> {
         let start_time = std::time::Instant::now();
-        let normalized_domain = domain.trim().to_lowercase();
-        
-        // Basic domain validation
-        if normalized_domain.is_empty() {
-            return Err(WhoisError::InvalidDomain("Empty domain".to_string()));
-        }
-        
-        if !normalized_domain.contains('.') {
-            return Err(WhoisError::InvalidDomain("Invalid domain format".to_string()));
-        }
+        let normalized_domain = Self::validate_and_normalize_domain(domain)?;
 
         // Check cache first (if available and not requesting fresh)
         if !fresh {
-            if let Some(cache) = &self.cache {
-                match cache.get(&normalized_domain).await {
-                    Ok(Some(cached_result)) => {
-                        return Ok(cached_result);
-                    }
-                    Ok(None) => {
-                        // Cache miss, continue to fresh lookup
-                    }
-                    Err(e) => {
-                        tracing::warn!("Cache read error for {}: {}", normalized_domain, e);
-                        // Continue to fresh lookup on cache error
-                    }
-                }
+            if let Some(cached_result) = self.check_cache(&normalized_domain).await {
+                return Ok(cached_result);
             }
         }
 
@@ -153,19 +146,69 @@ impl WhoisClient {
         };
 
         // Cache the result if cache is available
-        if let Some(cache) = &self.cache {
-            if let Err(e) = cache.set(&normalized_domain, &response).await {
-                tracing::warn!("Failed to cache result for {}: {}", normalized_domain, e);
-                // Don't fail the request for cache write errors
-            }
-        }
+        self.cache_result(&normalized_domain, &response).await;
 
         Ok(response)
     }
 
+    /// Validate and normalize domain - eliminates DRY violation
+    fn validate_and_normalize_domain(domain: &str) -> Result<String, WhoisError> {
+        let normalized_domain = domain.trim().to_lowercase();
+        
+        // Basic domain validation
+        if normalized_domain.is_empty() {
+            return Err(WhoisError::InvalidDomain("Empty domain".to_string()));
+        }
+        
+        if !normalized_domain.contains('.') {
+            return Err(WhoisError::InvalidDomain("Invalid domain format".to_string()));
+        }
+
+        Ok(normalized_domain)
+    }
+
+    /// Check cache - follows SRP
+    async fn check_cache(&self, domain: &str) -> Option<WhoisResponse> {
+        if let Some(cache) = &self.cache {
+            match cache.get(domain).await {
+                Ok(Some(cached_result)) => {
+                    return Some(cached_result);
+                }
+                Ok(None) => {
+                    // Cache miss, continue to fresh lookup
+                }
+                Err(e) => {
+                    tracing::warn!("Cache read error for {}: {}", domain, e);
+                    // Continue to fresh lookup on cache error
+                }
+            }
+        }
+        None
+    }
+
+    /// Cache result - follows SRP
+    async fn cache_result(&self, domain: &str, response: &WhoisResponse) {
+        if let Some(cache) = &self.cache {
+            if let Err(e) = cache.set(domain, response).await {
+                tracing::warn!("Failed to cache result for {}: {}", domain, e);
+                // Don't fail the request for cache write errors
+            }
+        }
+    }
+
+    // === Utility Methods ===
+
     /// Get cache statistics if caching is enabled
     pub fn cache_enabled(&self) -> bool {
         self.cache.is_some()
+    }
+
+    // === Private Helper Methods ===
+
+    /// Load default configuration - eliminates DRY violation
+    fn load_default_config() -> Result<Arc<Config>, WhoisError> {
+        let config = Arc::new(Config::load().map_err(|e| WhoisError::ConfigError(e))?);
+        Ok(config)
     }
 }
 
