@@ -266,6 +266,13 @@ impl WhoisService {
     fn extract_server_after_colon(&self, line: &str, server_type: &str) -> Option<String> {
         if let Some(server) = line.split(':').nth(1) {
             let server = server.trim().to_string();
+            
+            // Reject empty servers - this allows fallback to pattern generation
+            if server.is_empty() {
+                debug!("Found empty {} field, will try pattern generation", server_type);
+                return None;
+            }
+            
             debug!("Found {}: {}", server_type, server);
             return Some(server);
         }
