@@ -14,7 +14,7 @@ use tower_http::{
     trace::TraceLayer,
     compression::CompressionLayer,
 };
-use tracing::info;
+use tracing::{info, warn};
 
 // Constants to eliminate magic numbers
 const CACHE_WRITE_TIMEOUT_SECS: u64 = 5;
@@ -22,6 +22,7 @@ const CACHE_WRITE_TIMEOUT_SECS: u64 = 5;
 // Import from the library instead of local modules
 use whois_service::{
     whois::WhoisService,
+    rdap::RdapService,
     cache::CacheService,
     config::Config,
     errors::WhoisError,
@@ -34,6 +35,7 @@ mod metrics;
 #[derive(Clone)]
 pub struct AppState {
     whois_service: Arc<WhoisService>,
+    rdap_service: Arc<RdapService>,
     cache_service: Arc<CacheService>,
     config: Arc<Config>,
 }
@@ -144,6 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize services
     let whois_service = Arc::new(WhoisService::new(config.clone()).await?);
+    let rdap_service = Arc::new(RdapService::new(config.clone()).await?);
     let cache_service = Arc::new(CacheService::new(config.clone())?);  // Handle cache initialization error
 
     // Initialize metrics
@@ -151,6 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app_state = AppState {
         whois_service,
+        rdap_service,
         cache_service,
         config: config.clone(),
     };
@@ -196,6 +200,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+// Three-tier lookup: RDAP -> WHOIS -> (Command-line skipped for now)
+async fn three_tier_lookup(
+    state: &AppState,
+    domain: &str,
+) -> Result<(String, String, Option<whois_service::ParsedWhoisData>, Vec<String>), WhoisError> {
+    // Tier 1: Try RDAP first (modern, structured JSON)
+    match state.rdap_service.lookup(domain).await {
+        Ok(rdap_result) => {
+            info!("✓ RDAP lookup successful for {}", domain);
+            return Ok((
+                format!("RDAP: {}", rdap_result.server), 
+                rdap_result.raw_data,
+                rdap_result.parsed_data,
+                rdap_result.parsing_analysis,
+            ));
+        }
+        Err(e) => {
+            info!("⚠ RDAP lookup failed for {}: {} - falling back to WHOIS", domain, e);
+        }
+    }
+
+    // Tier 2: Fallback to WHOIS (legacy but comprehensive)
+    match state.whois_service.lookup(domain).await {
+        Ok(whois_result) => {
+            info!("✓ WHOIS lookup successful for {}", domain);
+            Ok((
+                format!("WHOIS: {}", whois_result.server),
+                whois_result.raw_data,
+                whois_result.parsed_data,  
+                whois_result.parsing_analysis,
+            ))
+        }
+        Err(e) => {
+            warn!("❌ Both RDAP and WHOIS lookups failed for {}", domain);
+            Err(e)
+        }
+    }
+}
+
 async fn whois_lookup(
     Query(params): Query<WhoisQuery>,
     State(state): State<AppState>,
@@ -217,14 +260,8 @@ async fn whois_lookup(
         }
     }
 
-    // Perform whois lookup with error tracking
-    let result = match state.whois_service.lookup(&domain).await {
-        Ok(result) => result,
-        Err(e) => {
-            track_whois_error(&e);
-            return Err(e);
-        }
-    };
+    // Perform three-tier lookup
+    let result = three_tier_lookup(&state, &domain).await?;
     
     let query_time = start_time.elapsed().as_millis() as u64;
     
@@ -237,18 +274,6 @@ async fn whois_lookup(
     metrics::increment_cache_misses();
 
     Ok(Json(response))
-}
-
-// Helper function to track different error types - follows SRP
-fn track_whois_error(error: &WhoisError) {
-    match error {
-        WhoisError::Timeout => metrics::increment_errors("timeout"),
-        WhoisError::UnsupportedTld(_) => metrics::increment_errors("unsupported_tld"),
-        WhoisError::ResponseTooLarge => metrics::increment_errors("response_too_large"),
-        WhoisError::IoError(_) => metrics::increment_errors("io_error"),
-        WhoisError::InvalidUtf8 => metrics::increment_errors("invalid_utf8"),
-        _ => metrics::increment_errors("other"),
-    }
 }
 
 // Helper function to handle cache writes - follows SRP
@@ -274,18 +299,18 @@ async fn handle_cache_write(cache_service: &CacheService, domain: &str, response
 // Helper function to build WhoisResponse - eliminates DRY violation
 fn build_whois_response(
     domain: String,
-    result: whois_service::whois::WhoisResult,
+    result: (String, String, Option<whois_service::ParsedWhoisData>, Vec<String>),
     query_time: u64,
     include_debug: bool,
 ) -> WhoisResponse {
     WhoisResponse {
         domain,
-        whois_server: result.server,
-        raw_data: result.raw_data,
-        parsed_data: result.parsed_data,
+        whois_server: result.0,
+        raw_data: result.1,
+        parsed_data: result.2,
         cached: false,
         query_time_ms: query_time,
-        parsing_analysis: if include_debug { Some(result.parsing_analysis) } else { None },
+        parsing_analysis: if include_debug { Some(result.3) } else { None },
     }
 }
 
@@ -310,7 +335,7 @@ async fn whois_debug(
     metrics::increment_requests(&domain);
 
     // Always perform fresh lookup for debug (no cache)
-    let result = state.whois_service.lookup(&domain).await?;
+    let result = three_tier_lookup(&state, &domain).await?;
     
     let query_time = start_time.elapsed().as_millis() as u64;
     

@@ -29,6 +29,7 @@
 //! ```
 
 pub mod whois;
+pub mod rdap;
 pub mod cache;
 pub mod config;
 pub mod errors;
@@ -38,6 +39,7 @@ pub mod parser;
 
 // Re-export main types for easy access
 pub use whois::{WhoisService, WhoisResult};
+pub use rdap::{RdapService, RdapResult};
 pub use cache::CacheService;
 pub use config::Config;
 pub use errors::WhoisError;
