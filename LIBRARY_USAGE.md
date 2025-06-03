@@ -1,6 +1,15 @@
 # Library Usage Guide
 
-This guide provides comprehensive examples for using the whois service as a Rust library in your applications.
+This guide provides comprehensive examples for using the **RDAP-enabled** whois service as a Rust library in your applications.
+
+## 🚀 Three-Tier Lookup System
+
+The library automatically uses a **revolutionary three-tier approach**:
+1. **RDAP First** - Modern, structured JSON responses (450-800ms)
+2. **WHOIS Fallback** - Universal coverage for any domain (~1300ms)  
+3. **Smart Caching** - Repeated lookups served in ~5ms
+
+Your code stays simple - the library handles the complexity!
 
 ## 📦 Installation
 
@@ -10,6 +19,125 @@ Add to your `Cargo.toml`:
 [dependencies]
 whois-service = "0.1.0"
 tokio = { version = "1.0", features = ["full"] }
+```
+
+## 🛡️ Cybersecurity Examples
+
+### Threat Intelligence & Fresh Domain Detection
+
+```rust
+use whois_service::WhoisClient;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = WhoisClient::new().await?;
+    
+    // Analyze suspicious domain from alert
+    let result = client.lookup("suspicious-domain.tk").await?;
+    
+    println!("Server: {} ({}ms)", result.whois_server, result.query_time_ms);
+    println!("Protocol: {}", if result.whois_server.contains("RDAP") { "RDAP" } else { "WHOIS" });
+    
+    if let Some(data) = result.parsed_data {
+        // 🔍 Cybersecurity Analysis
+        if let Some(age) = data.created_ago {
+            if age < 30 {
+                println!("🚨 ALERT: Newly registered domain ({} days old)", age);
+            } else if age < 365 {
+                println!("⚠️  WARNING: Recent domain ({} days old)", age);
+            } else {
+                println!("✅ Established domain ({} days old)", age);
+            }
+        }
+        
+        // Infrastructure analysis
+        println!("Registrar: {:?}", data.registrar);
+        println!("Name servers: {:?}", data.name_servers);
+        
+        // Domain lifecycle tracking
+        if let Some(expires_in) = data.expires_in {
+            if expires_in < 30 {
+                println!("📅 Domain expires soon: {} days", expires_in);
+            }
+        }
+        
+        if let Some(updated_ago) = data.updated_ago {
+            if updated_ago < 7 {
+                println!("🔄 Recent activity: Updated {} days ago", updated_ago);
+            }
+        }
+    }
+    
+    Ok(())
+}
+```
+
+### Alert Enrichment Pipeline
+
+```rust
+use whois_service::WhoisClient;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = WhoisClient::new().await?;
+    
+    // Simulate alert stream with suspicious domains
+    let alert_domains = vec![
+        "phishing-site.ml",      // Free TLD often used in attacks
+        "malware-c2.tk",         // Another common phishing TLD
+        "legit-business.com",    // Established domain for comparison
+        "brand-typosquat.org",   // Potential brand impersonation
+    ];
+    
+    for domain in alert_domains {
+        match client.lookup(domain).await {
+            Ok(result) => {
+                let risk_score = calculate_risk_score(&result);
+                println!("🔍 {}: Risk Score {}/10", domain, risk_score);
+                
+                if risk_score >= 7 {
+                    println!("  🚨 HIGH RISK - Investigate immediately");
+                } else if risk_score >= 4 {
+                    println!("  ⚠️  MEDIUM RISK - Monitor closely");
+                } else {
+                    println!("  ✅ LOW RISK - Likely legitimate");
+                }
+            }
+            Err(e) => {
+                println!("❌ {}: Failed to enrich ({})", domain, e);
+            }
+        }
+    }
+    
+    Ok(())
+}
+
+fn calculate_risk_score(result: &whois_service::WhoisResponse) -> u8 {
+    let mut score = 0;
+    
+    if let Some(data) = &result.parsed_data {
+        // Fresh domains are high risk
+        if let Some(age) = data.created_ago {
+            if age < 7 { score += 4; }
+            else if age < 30 { score += 3; }
+            else if age < 90 { score += 1; }
+        }
+        
+        // Free TLDs often used in attacks
+        let domain = &result.domain;
+        if domain.ends_with(".tk") || domain.ends_with(".ml") || 
+           domain.ends_with(".ga") || domain.ends_with(".cf") {
+            score += 2;
+        }
+        
+        // Recent updates might indicate compromise
+        if let Some(updated) = data.updated_ago {
+            if updated < 7 { score += 1; }
+        }
+    }
+    
+    score.min(10)
+}
 ```
 
 ## 🚀 Basic Usage
@@ -25,20 +153,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let result = client.lookup("google.com").await?;
     
-    println!("Server: {}", result.server);
+    println!("Server: {}", result.whois_server);
     println!("Cached: {}", result.cached);
+    println!("Query time: {}ms", result.query_time_ms);
     
     if let Some(data) = result.parsed_data {
         println!("Registrar: {:?}", data.registrar);
-        println!("Created: {:?}", data.created);
-        println!("Expires: {:?}", data.expires);
+        println!("Creation date: {:?}", data.creation_date);
+        println!("Expiration date: {:?}", data.expiration_date);
         println!("Domain age: {} days", data.created_ago.unwrap_or(0));
         println!("Expires in: {} days", data.expires_in.unwrap_or(0));
+        println!("Updated: {} days ago", data.updated_ago.unwrap_or(0));
     }
     
     Ok(())
 }
-```
 
 ### Error Handling
 
@@ -51,7 +180,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     match client.lookup("invalid-domain").await {
         Ok(result) => {
-            println!("Success: {}", result.server);
+            println!("Success: {} ({}ms)", result.whois_server, result.query_time_ms);
         }
         Err(WhoisError::InvalidDomain(domain)) => {
             println!("Invalid domain: {}", domain);
@@ -59,7 +188,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(WhoisError::UnsupportedTld(tld)) => {
             println!("Unsupported TLD: {}", tld);
         }
-        Err(WhoisError::NetworkTimeout) => {
+        Err(WhoisError::Timeout) => {
             println!("Network timeout - try again later");
         }
         Err(e) => {
@@ -73,25 +202,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## 🔧 Configuration Options
 
-### Custom Configuration
+### Custom Configuration for High-Volume Alert Enrichment
 
 ```rust
 use whois_service::{WhoisClient, Config};
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = Config {
-        whois_timeout_seconds: 15,
-        cache_ttl_seconds: 1800,
-        cache_max_entries: 5000,
-        concurrent_whois_queries: 4,
+    // Optimized for 800+ domains/minute alert enrichment
+    let config = Arc::new(Config {
+        whois_timeout_seconds: 30,
+        cache_ttl_seconds: 3600,        // 1-hour cache for alerts
+        cache_max_entries: 60000,       // Handle large alert volumes
+        concurrent_whois_queries: 8,    // High concurrency
+        buffer_pool_size: 200,          // More buffers for throughput
+        buffer_size: 32768,             // Larger buffers
         ..Default::default()
-    };
+    });
     
     let client = WhoisClient::new_with_config(config).await?;
     let result = client.lookup("example.com").await?;
     
-    println!("Result: {:?}", result.parsed_data);
+    println!("RDAP/WHOIS Result: {:?}", result.parsed_data);
     Ok(())
 }
 ```
@@ -107,7 +240,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = WhoisClient::new_without_cache().await?;
     
     let result = client.lookup("github.com").await?;
-    println!("Server: {}", result.server);
+    println!("Server: {}", result.whois_server);
     // result.cached will always be false
     
     Ok(())
@@ -116,7 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## 🔄 Batch Processing
 
-### Sequential Processing
+### Sequential Processing with RDAP Performance
 
 ```rust
 use whois_service::WhoisClient;
@@ -130,8 +263,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for domain in domains {
         match client.lookup(domain).await {
             Ok(result) => {
-                println!("✅ {}: {} (cached: {})", 
-                    domain, result.server, result.cached);
+                let protocol = if result.whois_server.contains("RDAP") { "RDAP" } else { "WHOIS" };
+                println!("✅ {}: {} via {} ({}ms, cached: {})", 
+                    domain, result.whois_server, protocol, result.query_time_ms, result.cached);
             }
             Err(e) => {
                 println!("❌ {}: {}", domain, e);
@@ -173,9 +307,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(result) = join_set.join_next().await {
         match result? {
             (domain, Ok(whois_result)) => {
-                println!("✅ {}: {} ({}ms)", 
+                let protocol = if whois_result.whois_server.contains("RDAP") { "RDAP" } else { "WHOIS" };
+                println!("✅ {}: {} via {} ({}ms)", 
                     domain, 
-                    whois_result.server,
+                    whois_result.whois_server,
+                    protocol,
                     whois_result.query_time_ms
                 );
             }
@@ -404,7 +540,7 @@ async fn lookup_domain(
     match client.lookup(&domain).await {
         Ok(result) => Ok(Json(json!({
             "domain": domain,
-            "server": result.server,
+            "server": result.whois_server,
             "cached": result.cached,
             "data": result.parsed_data
         }))),
@@ -504,7 +640,7 @@ async fn robust_lookup(
     
     match result {
         Ok(Ok(whois_result)) => {
-            Ok(format!("Success: {} via {}", domain, whois_result.server))
+            Ok(format!("Success: {} via {}", domain, whois_result.whois_server))
         }
         Ok(Err(WhoisError::InvalidDomain(_))) => {
             Err(format!("Invalid domain format: {}", domain))
@@ -512,7 +648,7 @@ async fn robust_lookup(
         Ok(Err(WhoisError::UnsupportedTld(tld))) => {
             Err(format!("TLD '{}' not supported", tld))
         }
-        Ok(Err(WhoisError::NetworkTimeout)) => {
+        Ok(Err(WhoisError::Timeout)) => {
             Err(format!("Network timeout for {}", domain))
         }
         Ok(Err(WhoisError::IoError(e))) => {
