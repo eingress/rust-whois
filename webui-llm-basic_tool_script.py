@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 class Tools:
     def __init__(self):
-        self.whois_api_base = os.getenv("WHOIS_API_BASE", "http://localhost:3000")
+        self.whois_api_base = os.getenv("WHOIS_API_BASE", "http://localhost:3001")
         
     def whois(
         self,

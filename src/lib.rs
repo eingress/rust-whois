@@ -37,6 +37,12 @@ pub mod tld_mappings;
 pub mod buffer_pool;
 pub mod parser;
 
+// OpenAPI support (optional)
+#[cfg(feature = "openapi")]
+use utoipa::ToSchema;
+#[cfg(feature = "openapi")]
+use serde_json::json;
+
 // Re-export main types for easy access
 pub use whois::{WhoisService, WhoisResult};
 pub use rdap::{RdapService, RdapResult};
@@ -50,20 +56,55 @@ use std::sync::Arc;
 
 /// Parsed whois data structure with calculated fields
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ParsedWhoisData {
+    /// Domain registrar name
+    #[cfg_attr(feature = "openapi", schema(example = "MarkMonitor Inc."))]
     pub registrar: Option<String>,
+    
+    /// Domain creation date in ISO 8601 format
+    #[cfg_attr(feature = "openapi", schema(example = "1997-09-15T04:00:00Z"))]
     pub creation_date: Option<String>,
+    
+    /// Domain expiration date in ISO 8601 format
+    #[cfg_attr(feature = "openapi", schema(example = "2028-09-14T04:00:00Z"))]
     pub expiration_date: Option<String>,
+    
+    /// Last update date in ISO 8601 format
+    #[cfg_attr(feature = "openapi", schema(example = "2019-09-09T15:39:04Z"))]
     pub updated_date: Option<String>,
+    
+    /// Domain name servers
+    #[cfg_attr(feature = "openapi", schema(example = json!(["NS1.GOOGLE.COM", "NS2.GOOGLE.COM"])))]
     pub name_servers: Vec<String>,
+    
+    /// Domain status codes (useful for security analysis)
+    #[cfg_attr(feature = "openapi", schema(example = json!(["clientDeleteProhibited", "clientTransferProhibited"])))]
     pub status: Vec<String>,
+    
+    /// Registrant name
     pub registrant_name: Option<String>,
+    
+    /// Registrant email
     pub registrant_email: Option<String>,
+    
+    /// Administrative contact email
     pub admin_email: Option<String>,
+    
+    /// Technical contact email
     pub tech_email: Option<String>,
-    pub created_ago: Option<i64>,  // Days since creation
-    pub updated_ago: Option<i64>,  // Days since last update
-    pub expires_in: Option<i64>,   // Days until expiration (negative if expired)
+    
+    /// Days since domain creation (threat indicator - newly registered domains are suspicious)
+    #[cfg_attr(feature = "openapi", schema(example = 10117))]
+    pub created_ago: Option<i64>,
+    
+    /// Days since last update (activity indicator)
+    #[cfg_attr(feature = "openapi", schema(example = 45))]
+    pub updated_ago: Option<i64>,
+    
+    /// Days until expiration (domain monitoring - negative if expired)
+    #[cfg_attr(feature = "openapi", schema(example = 1204))]
+    pub expires_in: Option<i64>,
 }
 
 /// High-level whois client with optional caching
@@ -216,6 +257,7 @@ impl WhoisClient {
 
 /// Response structure for whois lookups
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct WhoisResponse {
     pub domain: String,
     pub whois_server: String,

@@ -5,6 +5,11 @@ use axum::{
     Router,
     http::request::Parts,
 };
+
+#[cfg(feature = "openapi")]
+use utoipa::{OpenApi, ToSchema};
+#[cfg(feature = "openapi")]
+use utoipa_swagger_ui::SwaggerUi;
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
@@ -27,10 +32,45 @@ use whois_service::{
     config::Config,
     errors::WhoisError,
     WhoisResponse,  // Use the library's WhoisResponse
+    ParsedWhoisData, // Import for OpenAPI schema
 };
 
 // Import metrics module locally (API-only)
 mod metrics;
+
+#[cfg(feature = "openapi")]
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        whois_lookup,
+        whois_lookup_path,
+        whois_debug,
+        whois_debug_path,
+        health_check
+    ),
+    components(schemas(HealthResponse, WhoisResponse, ParsedWhoisData)),
+    tags(
+        (name = "whois", description = "Domain whois lookup operations"),
+        (name = "system", description = "System health and monitoring")
+    ),
+    info(
+        title = "Whois Service API",
+        version = "0.1.0",
+        description = "High-performance whois lookup service with RDAP support for cybersecurity applications. Features RDAP-first lookup with intelligent fallback to traditional whois.",
+        contact(
+            name = "Whois Service Support",
+            email = "support@example.com"
+        ),
+        license(
+            name = "MIT OR Apache-2.0"
+        )
+    ),
+    servers(
+        (url = "http://localhost:3000", description = "Development server"),
+        (url = "https://api.example.com", description = "Production server")
+    )
+)]
+struct ApiDoc;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -114,19 +154,26 @@ impl ValidatedDomain {
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::IntoParams))]
 struct WhoisQuery {
     /// Domain name to lookup (e.g., "example.com")
     /// Must be a valid, pre-parsed domain name
+    #[cfg_attr(feature = "openapi", param(example = "google.com"))]
     domain: String,
     #[serde(default)]
     /// Skip cache if true
+    #[cfg_attr(feature = "openapi", param(default = false))]
     fresh: bool,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 struct HealthResponse {
+    #[cfg_attr(feature = "openapi", schema(example = "healthy"))]
     status: String,
+    #[cfg_attr(feature = "openapi", schema(example = "0.1.0"))]
     version: String,
+    #[cfg_attr(feature = "openapi", schema(example = 3600))]
     uptime_seconds: u64,
 }
 
@@ -160,7 +207,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Build the application
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/whois", get(whois_lookup))
         .route("/whois", post(whois_lookup_post))
         .route("/whois/:domain", get(whois_lookup_path))  // Path-based route for easier testing
@@ -177,12 +224,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_state(app_state);
 
+    // Add OpenAPI documentation if feature is enabled
+    #[cfg(feature = "openapi")]
+    {
+        app = app.merge(SwaggerUi::new("/docs").url("/api-docs/openapi.json", ApiDoc::openapi()));
+    }
+
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = TcpListener::bind(addr).await?;
     
     info!("Whois service listening on {}", addr);
     info!("Health check: http://{}/health", addr);
     info!("Metrics: http://{}/metrics", addr);
+    #[cfg(feature = "openapi")]
+    info!("API Documentation: http://{}/docs", addr);
     info!("API expects pre-parsed domain names (e.g., 'example.com')");
 
     // Graceful shutdown handling
@@ -239,6 +294,17 @@ async fn three_tier_lookup(
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/whois",
+    params(WhoisQuery),
+    responses(
+        (status = 200, description = "Whois lookup successful", body = WhoisResponse),
+        (status = 400, description = "Invalid domain"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "whois"
+))]
 async fn whois_lookup(
     Query(params): Query<WhoisQuery>,
     State(state): State<AppState>,
@@ -321,6 +387,17 @@ async fn whois_lookup_post(
     whois_lookup(Query(payload), State(state)).await
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/whois/debug",
+    params(WhoisQuery),
+    responses(
+        (status = 200, description = "Whois lookup with debug information", body = WhoisResponse),
+        (status = 400, description = "Invalid domain"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "whois"
+))]
 async fn whois_debug(
     Query(params): Query<WhoisQuery>,
     State(state): State<AppState>,
@@ -347,6 +424,19 @@ async fn whois_debug(
 }
 
 // Path-based whois lookup for easier testing
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/whois/{domain}",
+    params(
+        ("domain" = String, Path, description = "Domain name to lookup", example = "google.com")
+    ),
+    responses(
+        (status = 200, description = "Whois lookup successful", body = WhoisResponse),
+        (status = 400, description = "Invalid domain format"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "whois"
+))]
 async fn whois_lookup_path(
     validated_domain: ValidatedDomain,
     State(state): State<AppState>,
@@ -356,6 +446,19 @@ async fn whois_lookup_path(
 }
 
 // Path-based debug lookup for easier testing
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/whois/debug/{domain}",
+    params(
+        ("domain" = String, Path, description = "Domain name to lookup with debug info", example = "google.com")
+    ),
+    responses(
+        (status = 200, description = "Whois lookup with debug information", body = WhoisResponse),
+        (status = 400, description = "Invalid domain format"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "whois"
+))]
 async fn whois_debug_path(
     validated_domain: ValidatedDomain,
     State(state): State<AppState>,
@@ -364,6 +467,14 @@ async fn whois_debug_path(
     whois_debug(Query(query), State(state)).await
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/health",
+    responses(
+        (status = 200, description = "Service is healthy", body = HealthResponse)
+    ),
+    tag = "system"
+))]
 async fn health_check(State(state): State<AppState>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "healthy".to_string(),

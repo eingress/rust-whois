@@ -19,10 +19,18 @@ name = "whois-service"
 path = "src/main.rs"
 required-features = ["server"]
 
+# MCP Server binary
+[[bin]]
+name = "whois-mcp-server"
+path = "src/mcp_server.rs"
+required-features = ["mcp"]
+
 # Feature flags
 [features]
 default = ["server"]
 server = ["axum", "tower", "tower-http", "metrics", "metrics-exporter-prometheus"]
+openapi = ["utoipa", "utoipa-swagger-ui"]
+mcp = ["tokio", "serde", "serde_json"]
 
 [dependencies]
 # Core library dependencies
@@ -53,6 +61,10 @@ metrics-exporter-prometheus = { version = "0.13", optional = true }
 axum = { version = "0.7", features = ["macros", "tracing"], optional = true }
 tower = { version = "0.4", features = ["timeout", "limit"], optional = true }
 tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip"], optional = true }
+
+# Optional OpenAPI dependencies
+utoipa = { version = "5.0", features = ["axum_extras"], optional = true }
+utoipa-swagger-ui = { version = "8.0", features = ["axum"], optional = true }
 
 [profile.release]
 lto = true
