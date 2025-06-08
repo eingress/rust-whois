@@ -215,13 +215,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/whois/debug/:domain", get(whois_debug_path))  // Path-based debug route
         .route("/health", get(health_check))
         .route("/metrics", get(metrics::metrics_handler))
-        .layer(
-            ServiceBuilder::new()
-                .layer(TraceLayer::new_for_http())
-                .layer(CompressionLayer::new())
-                .layer(CorsLayer::permissive())
-                .into_inner(),
-        )
         .with_state(app_state);
 
     // Add OpenAPI documentation if feature is enabled
@@ -229,6 +222,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         app = app.merge(SwaggerUi::new("/docs").url("/api-docs/openapi.json", ApiDoc::openapi()));
     }
+
+    // Apply middleware layers AFTER all routes are added (including OpenAPI routes)
+    let app = app.layer(
+        ServiceBuilder::new()
+            .layer(TraceLayer::new_for_http())
+            .layer(CompressionLayer::new())
+            .layer(CorsLayer::permissive())
+            .into_inner(),
+    );
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = TcpListener::bind(addr).await?;
