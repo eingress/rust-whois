@@ -1,5 +1,17 @@
 # Whois Service
 
+This Rust whois library is designed to be faster than command line and scalable for automation.
+
+It uses RDAP as its primary protocol, pulling down the IANA server mapping at build time and utilizing a fallback to auto-discover RDAP, and then switches to hardcoded whois servers and then an auto-discover for whois, giving very dynamic fast discovery.
+
+Built to scale with high throughput and additional calculated fields (created_ago, updated_ago, expires_in, in days for ease of use).
+
+Caches up to 10k domains to avoid repeated querying to IANA and avoid getting rate limited.
+
+Available for use as a library or as an OpenAPI API using Axum with a Swagger UI implementation.
+
+---
+
 A high-performance, production-ready whois lookup service with **modern RDAP support** and three-tier fallback system, built in Rust for cybersecurity applications.
 
 ## 🚀 Revolutionary Three-Tier Lookup System
