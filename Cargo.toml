@@ -19,18 +19,14 @@ name = "whois-service"
 path = "src/main.rs"
 required-features = ["server"]
 
-# MCP Server binary
-[[bin]]
-name = "whois-mcp-server"
-path = "src/mcp_server.rs"
-required-features = ["mcp"]
+
 
 # Feature flags
 [features]
 default = ["server"]
 server = ["axum", "tower", "tower-http", "metrics", "metrics-exporter-prometheus"]
 openapi = ["utoipa", "utoipa-swagger-ui"]
-mcp = ["tokio", "serde", "serde_json"]
+
 
 [dependencies]
 # Core library dependencies
