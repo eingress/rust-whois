@@ -19,6 +19,7 @@ A high-performance, production-ready whois lookup service with **modern RDAP sup
 - **🔄 Smart Fallback**: RDAP failure automatically triggers WHOIS lookup
 - **📊 Structured Data**: Consistent parsing with calculated threat intelligence fields
 - **🏭 Production Grade**: Zero-downtime builds, comprehensive error handling
+- **📚 OpenAPI Support**: Full API documentation with Swagger UI (optional feature)
 
 ## 📊 Performance Metrics
 
@@ -42,12 +43,22 @@ curl "http://localhost:3000/whois/suspicious-domain.tk"
 
 # Response includes threat indicators:
 {
+  "domain": "suspicious-domain.tk",
+  "whois_server": "RDAP: https://rdap.afilias.net/rdap/tk/v1/",
+  "raw_data": "...",
   "parsed_data": {
     "created_ago": 2,        // ⚠️ Fresh domain (2 days old)
     "expires_in": 358,       // Valid for nearly a year
     "name_servers": [...],   // Infrastructure analysis
-    "registrar": "..."       // Registrar reputation data
-  }
+    "registrar": "...",      // Registrar reputation data
+    "status": [...],         // Domain status codes
+    "registrant_email": "...", // Contact information
+    "admin_email": "...",    // Administrative contact
+    "tech_email": "..."      // Technical contact
+  },
+  "cached": false,
+  "query_time_ms": 447,
+  "parsing_analysis": null   // Available in debug mode
 }
 ```
 
@@ -60,6 +71,7 @@ curl "http://localhost:3000/whois/suspicious-domain.tk"
 - **Library + API**: Use as a Rust library or run as a standalone HTTP service
 - **Structured Data**: Intelligent parsing with calculated fields (domain age, expiration days)
 - **International Support**: Unicode domain handling with Mozilla's Public Suffix List
+- **OpenAPI Documentation**: Full API documentation with Swagger UI (optional feature)
 
 ## 📊 Performance
 
@@ -113,27 +125,20 @@ curl "http://localhost:3000/whois/debug/google.com"
 # Health check & metrics
 curl "http://localhost:3000/health"
 curl "http://localhost:3000/metrics"
+
+# API Documentation (when OpenAPI feature is enabled)
+curl "http://localhost:3000/docs"
 ```
 
-3. **Example RDAP response:**
-```json
-{
-  "domain": "google.com",
-  "server": "RDAP: https://rdap.verisign.com/com/v1/",
-  "cached": false,
-  "query_time_ms": 447,
-  "parsed_data": {
-    "registrar": "MarkMonitor Inc.",
-    "creation_date": "1997-09-15T04:00:00Z",
-    "expiration_date": "2028-09-14T04:00:00Z", 
-    "created_ago": 10117,  // Days since creation (threat indicator)
-    "expires_in": 1204,    // Days until expiration
-    "updated_ago": 45,     // Recent activity indicator
-    "name_servers": ["NS1.GOOGLE.COM", "NS2.GOOGLE.COM"],
-    "status": ["clientDeleteProhibited", "clientTransferProhibited"]
-  }
-}
-```
+3. **Available Endpoints:**
+- `GET /whois?domain=example.com` - Standard whois lookup
+- `POST /whois` - JSON body with domain parameter
+- `GET /whois/:domain` - Path-based lookup
+- `GET /whois/debug?domain=example.com` - Debug mode with parsing analysis
+- `GET /whois/debug/:domain` - Path-based debug lookup
+- `GET /health` - Service health check
+- `GET /metrics` - Prometheus metrics
+- `GET /docs` - OpenAPI documentation (when enabled)
 
 ## 🏗 Architecture & Design
 
@@ -213,15 +218,24 @@ The library automatically uses the same three-tier RDAP → WHOIS system with in
 ### Environment Variables
 ```bash
 # Server configuration
-export PORT=3000
-export WHOIS_TIMEOUT_SECONDS=30
+export PORT=3000                    # HTTP port (default: 3000)
+export WHOIS_TIMEOUT_SECONDS=30     # WHOIS query timeout
+export MAX_RESPONSE_SIZE=10485760   # Maximum response size (10MB)
+export MAX_REFERRALS=10            # Maximum WHOIS referrals to follow
 
-# RDAP + Cache optimization for high-volume alert enrichment
-export CACHE_TTL_SECONDS=3600        # 1-hour cache for alerts
-export CACHE_MAX_ENTRIES=60000       # Handle 800 URLs/min × 60 min
+# RDAP + Cache optimization
+export CACHE_TTL_SECONDS=3600      # Cache TTL (1 hour)
+export CACHE_MAX_ENTRIES=60000     # Maximum cache entries
+export DISCOVERY_TIMEOUT_SECONDS=20 # RDAP discovery timeout
 
 # Performance tuning
-export CONCURRENT_WHOIS_QUERIES=8
+export CONCURRENT_WHOIS_QUERIES=8   # Concurrent WHOIS queries
+export BUFFER_POOL_SIZE=100        # Network buffer pool size
+export BUFFER_SIZE=16384          # Network buffer size (16KB)
+
+# Optional features
+export RUST_LOG=whois_service=info # Logging level
+export ENABLE_OPENAPI=true         # Enable OpenAPI documentation
 ```
 
 ### Docker Deployment
@@ -233,6 +247,9 @@ docker build -t whois-service .
 docker run -p 3000:3000 \
   -e CACHE_MAX_ENTRIES=60000 \
   -e CACHE_TTL_SECONDS=3600 \
+  -e CONCURRENT_WHOIS_QUERIES=8 \
+  -e BUFFER_POOL_SIZE=100 \
+  -e BUFFER_SIZE=16384 \
   whois-service
 ```
 
@@ -240,12 +257,31 @@ docker run -p 3000:3000 \
 ```yaml
 resources:
   requests:
-    memory: "128Mi"
-    cpu: "250m"
+    memory: "256Mi"    # Base memory requirement
+    cpu: "250m"        # Base CPU requirement
   limits:
     memory: "512Mi"    # Handles 48K cached domains
     cpu: "1000m"       # Single pod: ~100 enrichments/min
+
+env:
+  - name: CACHE_MAX_ENTRIES
+    value: "60000"
+  - name: CACHE_TTL_SECONDS
+    value: "3600"
+  - name: CONCURRENT_WHOIS_QUERIES
+    value: "8"
+  - name: BUFFER_POOL_SIZE
+    value: "100"
+  - name: BUFFER_SIZE
+    value: "16384"
 ```
+
+### System-Adaptive Configuration
+The service automatically adapts to system resources:
+- **Memory**: Cache size and buffer pools scale with available RAM
+- **CPU**: Concurrency limits based on core count
+- **Network**: Timeout adjustments based on network conditions
+- **Environment**: Production vs development settings
 
 ## 🧪 Testing & Verification
 
