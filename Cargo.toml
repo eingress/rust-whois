@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "High-performance whois lookup service and library with dynamic TLD discovery"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/your-username/whois-service"
+repository = "https://github.com/alesiancyber/rust-whois"
 keywords = ["whois", "dns", "domain", "lookup", "async"]
 categories = ["network-programming", "web-programming"]
 
