@@ -1,38 +1,34 @@
 use axum::{
-    extract::{Query, State, FromRequestParts},
+    extract::{FromRequestParts, Query, State},
+    http::request::Parts,
     response::Json,
     routing::{get, post},
     Router,
-    http::request::Parts,
 };
 
-#[cfg(feature = "openapi")]
-use utoipa::{OpenApi, ToSchema};
-#[cfg(feature = "openapi")]
-use utoipa_swagger_ui::SwaggerUi;
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
-use tower_http::{
-    cors::CorsLayer,
-    trace::TraceLayer,
-    compression::CompressionLayer,
-};
+use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
 use tracing::{info, warn};
+#[cfg(feature = "openapi")]
+use utoipa::{OpenApi, ToSchema};
+#[cfg(feature = "openapi")]
+use utoipa_swagger_ui::SwaggerUi;
 
 // Constants to eliminate magic numbers
 const CACHE_WRITE_TIMEOUT_SECS: u64 = 5;
 
 // Import from the library instead of local modules
 use whois_service::{
-    whois::WhoisService,
-    rdap::RdapService,
     cache::CacheService,
     config::Config,
     errors::WhoisError,
-    WhoisResponse,  // Use the library's WhoisResponse
+    rdap::RdapService,
+    whois::WhoisService,
     ParsedWhoisData, // Import for OpenAPI schema
+    WhoisResponse,   // Use the library's WhoisResponse
 };
 
 // Import metrics module locally (API-only)
@@ -101,53 +97,61 @@ where
 impl ValidatedDomain {
     // Separate concern: path extraction
     fn extract_domain_from_path(path: &str) -> Result<String, WhoisError> {
-        // Handle /whois/debug/:domain
-        if let Some(domain_part) = path.strip_prefix("/whois/debug/") {
+        // Handle /debug/:domain
+        if let Some(domain_part) = path.strip_prefix("/debug/") {
             let domain = domain_part.split('/').next().unwrap_or("").to_string();
             if !domain.is_empty() {
                 return Ok(domain);
             }
         }
-        
-        // Handle /whois/:domain
-        if let Some(domain_part) = path.strip_prefix("/whois/") {
+
+        // Handle /:domain
+        if let Some(domain_part) = path.strip_prefix("/") {
             let domain = domain_part.split('/').next().unwrap_or("").to_string();
             if !domain.is_empty() {
                 return Ok(domain);
             }
         }
-        
-        Err(WhoisError::InvalidDomain("Domain not found in path".to_string()))
+
+        Err(WhoisError::InvalidDomain(
+            "Domain not found in path".to_string(),
+        ))
     }
 
     // Separate concern: domain validation
     pub fn validate_domain(domain: String) -> Result<Self, WhoisError> {
         let domain = domain.trim().to_lowercase();
-        
+
         if domain.is_empty() {
             metrics::increment_errors("invalid_domain");
             return Err(WhoisError::InvalidDomain("Empty domain".to_string()));
         }
-        
+
         if domain.len() > 253 {
             metrics::increment_errors("domain_too_long");
-            return Err(WhoisError::InvalidDomain("Domain name too long".to_string()));
+            return Err(WhoisError::InvalidDomain(
+                "Domain name too long".to_string(),
+            ));
         }
-        
+
         if !domain.contains('.') {
             metrics::increment_errors("invalid_domain_format");
-            return Err(WhoisError::InvalidDomain("Invalid domain format".to_string()));
+            return Err(WhoisError::InvalidDomain(
+                "Invalid domain format".to_string(),
+            ));
         }
-        
+
         // Add more sophisticated validation
         if domain.contains("..") || domain.starts_with('.') || domain.ends_with('.') {
             metrics::increment_errors("invalid_domain_format");
-            return Err(WhoisError::InvalidDomain("Invalid domain format".to_string()));
+            return Err(WhoisError::InvalidDomain(
+                "Invalid domain format".to_string(),
+            ));
         }
-        
+
         Ok(ValidatedDomain(domain))
     }
-    
+
     pub(crate) fn from_query_params(params: &WhoisQuery) -> Result<Self, WhoisError> {
         Self::validate_domain(params.domain.clone())
     }
@@ -194,7 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize services
     let whois_service = Arc::new(WhoisService::new(config.clone()).await?);
     let rdap_service = Arc::new(RdapService::new(config.clone()).await?);
-    let cache_service = Arc::new(CacheService::new(config.clone())?);  // Handle cache initialization error
+    let cache_service = Arc::new(CacheService::new(config.clone())?); // Handle cache initialization error
 
     // Initialize metrics
     metrics::init_metrics();
@@ -208,11 +212,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build the application
     let mut app = Router::new()
-        .route("/whois", get(whois_lookup))
-        .route("/whois", post(whois_lookup_post))
-        .route("/whois/:domain", get(whois_lookup_path))  // Path-based route for easier testing
-        .route("/whois/debug", get(whois_debug))
-        .route("/whois/debug/:domain", get(whois_debug_path))  // Path-based debug route
+        .route("/", get(whois_lookup))
+        .route("/", post(whois_lookup_post))
+        .route("/:domain", get(whois_lookup_path)) // Path-based route for easier testing
+        .route("/debug", get(whois_debug))
+        .route("/debug/:domain", get(whois_debug_path)) // Path-based debug route
         .route("/health", get(health_check))
         .route("/metrics", get(metrics::metrics_handler))
         .with_state(app_state);
@@ -234,7 +238,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = TcpListener::bind(addr).await?;
-    
+
     info!("Whois service listening on {}", addr);
     info!("Health check: http://{}/health", addr);
     info!("Metrics: http://{}/metrics", addr);
@@ -261,20 +265,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn three_tier_lookup(
     state: &AppState,
     domain: &str,
-) -> Result<(String, String, Option<whois_service::ParsedWhoisData>, Vec<String>), WhoisError> {
+) -> Result<
+    (
+        String,
+        String,
+        Option<whois_service::ParsedWhoisData>,
+        Vec<String>,
+    ),
+    WhoisError,
+> {
     // Tier 1: Try RDAP first (modern, structured JSON)
     match state.rdap_service.lookup(domain).await {
         Ok(rdap_result) => {
             info!("✓ RDAP lookup successful for {}", domain);
             return Ok((
-                format!("RDAP: {}", rdap_result.server), 
+                format!("RDAP: {}", rdap_result.server),
                 rdap_result.raw_data,
                 rdap_result.parsed_data,
                 rdap_result.parsing_analysis,
             ));
         }
         Err(e) => {
-            info!("⚠ RDAP lookup failed for {}: {} - falling back to WHOIS", domain, e);
+            info!(
+                "⚠ RDAP lookup failed for {}: {} - falling back to WHOIS",
+                domain, e
+            );
         }
     }
 
@@ -285,7 +300,7 @@ async fn three_tier_lookup(
             Ok((
                 format!("WHOIS: {}", whois_result.server),
                 whois_result.raw_data,
-                whois_result.parsed_data,  
+                whois_result.parsed_data,
                 whois_result.parsing_analysis,
             ))
         }
@@ -298,7 +313,7 @@ async fn three_tier_lookup(
 
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
-    path = "/whois",
+    path = "/",
     params(WhoisQuery),
     responses(
         (status = 200, description = "Whois lookup successful", body = WhoisResponse),
@@ -312,11 +327,11 @@ async fn whois_lookup(
     State(state): State<AppState>,
 ) -> Result<Json<WhoisResponse>, WhoisError> {
     let start_time = std::time::Instant::now();
-    
+
     // Validate domain using centralized validation
     let validated_domain = ValidatedDomain::from_query_params(&params)?;
     let domain = validated_domain.0;
-    
+
     // Increment request counter
     metrics::increment_requests(&domain);
 
@@ -330,14 +345,14 @@ async fn whois_lookup(
 
     // Perform three-tier lookup
     let result = three_tier_lookup(&state, &domain).await?;
-    
+
     let query_time = start_time.elapsed().as_millis() as u64;
-    
+
     let response = build_whois_response(domain.clone(), result, query_time, false);
 
     // Cache the result (with error handling)
     handle_cache_write(&state.cache_service, &domain, &response).await;
-    
+
     metrics::record_query_time(query_time);
     metrics::increment_cache_misses();
 
@@ -348,8 +363,10 @@ async fn whois_lookup(
 async fn handle_cache_write(cache_service: &CacheService, domain: &str, response: &WhoisResponse) {
     match tokio::time::timeout(
         std::time::Duration::from_secs(CACHE_WRITE_TIMEOUT_SECS),
-        cache_service.set(domain, response)
-    ).await {
+        cache_service.set(domain, response),
+    )
+    .await
+    {
         Ok(Ok(())) => {
             // Cache write successful
         }
@@ -367,7 +384,12 @@ async fn handle_cache_write(cache_service: &CacheService, domain: &str, response
 // Helper function to build WhoisResponse - eliminates DRY violation
 fn build_whois_response(
     domain: String,
-    result: (String, String, Option<whois_service::ParsedWhoisData>, Vec<String>),
+    result: (
+        String,
+        String,
+        Option<whois_service::ParsedWhoisData>,
+        Vec<String>,
+    ),
     query_time: u64,
     include_debug: bool,
 ) -> WhoisResponse {
@@ -391,7 +413,7 @@ async fn whois_lookup_post(
 
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
-    path = "/whois/debug",
+    path = "/debug",
     params(WhoisQuery),
     responses(
         (status = 200, description = "Whois lookup with debug information", body = WhoisResponse),
@@ -405,19 +427,19 @@ async fn whois_debug(
     State(state): State<AppState>,
 ) -> Result<Json<WhoisResponse>, WhoisError> {
     let start_time = std::time::Instant::now();
-    
+
     // Validate domain using centralized validation
     let validated_domain = ValidatedDomain::from_query_params(&params)?;
     let domain = validated_domain.0;
-    
+
     // Increment request counter
     metrics::increment_requests(&domain);
 
     // Always perform fresh lookup for debug (no cache)
     let result = three_tier_lookup(&state, &domain).await?;
-    
+
     let query_time = start_time.elapsed().as_millis() as u64;
-    
+
     let response = build_whois_response(domain, result, query_time, true);
 
     metrics::record_query_time(query_time);
@@ -428,7 +450,7 @@ async fn whois_debug(
 // Path-based whois lookup for easier testing
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
-    path = "/whois/{domain}",
+    path = "/{domain}",
     params(
         ("domain" = String, Path, description = "Domain name to lookup", example = "google.com")
     ),
@@ -443,14 +465,17 @@ async fn whois_lookup_path(
     validated_domain: ValidatedDomain,
     State(state): State<AppState>,
 ) -> Result<Json<WhoisResponse>, WhoisError> {
-    let query = WhoisQuery { domain: validated_domain.0, fresh: false };
+    let query = WhoisQuery {
+        domain: validated_domain.0,
+        fresh: false,
+    };
     whois_lookup(Query(query), State(state)).await
 }
 
 // Path-based debug lookup for easier testing
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
-    path = "/whois/debug/{domain}",
+    path = "/debug/{domain}",
     params(
         ("domain" = String, Path, description = "Domain name to lookup with debug info", example = "google.com")
     ),
@@ -465,7 +490,10 @@ async fn whois_debug_path(
     validated_domain: ValidatedDomain,
     State(state): State<AppState>,
 ) -> Result<Json<WhoisResponse>, WhoisError> {
-    let query = WhoisQuery { domain: validated_domain.0, fresh: false };
+    let query = WhoisQuery {
+        domain: validated_domain.0,
+        fresh: false,
+    };
     whois_debug(Query(query), State(state)).await
 }
 
@@ -500,4 +528,4 @@ async fn check_cache(cache_service: &CacheService, domain: &str) -> Option<Whois
             None
         }
     }
-} 
+}
